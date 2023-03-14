@@ -38,15 +38,24 @@ import (
 )
 
 func newGatherer(config *state.Config, state *state.State, client *s3.Client, disableExporterMetrics bool, logger log.Logger) (prometheus.GathererFunc, error) {
+	level.Info(logger).Log("msg", "newGatherer")
 	reg := prometheus.NewRegistry()
 
 	if !disableExporterMetrics {
+		level.Info(logger).Log("msg", "export metrics collectors")
 		reg.MustRegister(collectors.NewBuildInfoCollector())
 		reg.MustRegister(collectors.NewGoCollector(
 			collectors.WithGoCollections(collectors.GoRuntimeMemStatsCollection | collectors.GoRuntimeMetricsCollection),
 		))
 	}
 
+	level.Info(logger).Log("msg", "prepare sqlite")
+	err := fetcher.PrepareSqlite(config, logger)
+	if err != nil {
+		return nil, err
+	}
+
+	level.Info(logger).Log("msg", "billing periods")
 	periods, err := fetcher.GetBillingPeriods(config, client)
 	if err != nil {
 		return nil, err
@@ -54,6 +63,7 @@ func newGatherer(config *state.Config, state *state.State, client *s3.Client, di
 
 	state.Periods = periods
 
+	level.Info(logger).Log("msg", "prefetch")
 	if err := collector.Prefetch(state, config, client, reg, periods, logger); err != nil {
 		return nil, err
 	}
@@ -62,6 +72,7 @@ func newGatherer(config *state.Config, state *state.State, client *s3.Client, di
 		return nil, err
 	}
 
+	level.Info(logger).Log("msg", "compute")
 	if err := processor.Compute(config, reg, logger); err != nil {
 		return nil, err
 	}
@@ -85,11 +96,14 @@ func newGatherer(config *state.Config, state *state.State, client *s3.Client, di
 				return nil, err
 			}
 
+			level.Info(logger).Log("msg", "Reports updated")
 			if changed {
+				level.Info(logger).Log("msg", "Save")
 				if err := state.Save(config); err != nil {
 					return nil, err
 				}
 
+				level.Info(logger).Log("msg", "Compute")
 				if err := processor.Compute(config, reg, logger); err != nil {
 					return nil, err
 				}
@@ -116,6 +130,11 @@ func main() {
 			"repository",
 			"Path to store cached AWS billing reports",
 		).Default("/var/lib/aws-cost-exporter/repository").String()
+
+		databasePath = kingpin.Flag(
+			"database",
+			"Path to store sqlite AWS billing reports",
+		).Default("/var/lib/aws-cost-exporter/database").String()
 
 		queriesPath = kingpin.Flag(
 			"queries-dir",
@@ -162,7 +181,8 @@ func main() {
 	if user, err := user.Current(); err == nil && user.Uid == "0" {
 		level.Warn(logger).Log("msg", "AWS Cost Exporter is running as root user. This exporter is designed to run as unpriviledged user, root is not required.")
 	}
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 1 * time.Minute)
+	defer cancel()
 
 	cfg, err := config.LoadDefaultConfig(ctx, config.WithDefaultRegion("us-east-1"))
 	if err != nil {
@@ -200,6 +220,7 @@ func main() {
 
 	config := &state.Config{
 		RepositoryPath: *repositoryPath,
+		DatabasePath: *databasePath,
 		QueriesPath:    *queriesPath,
 		StateFilePath:  *stateFilePath,
 
@@ -213,18 +234,21 @@ func main() {
 		os.Exit(1)
 	}
 
+	level.Info(logger).Log("gatherer", "Starting")
 	gatherer, err := newGatherer(config, state, client, *disableExporterMetrics, logger)
 	if err != nil {
 		level.Error(logger).Log("err", err)
 		os.Exit(1)
 	}
 
+	level.Info(logger).Log("http-handler", "Starting")
 	http.Handle(*metricsPath, promhttp.HandlerFor(
 		gatherer,
 		promhttp.HandlerOpts{
 			EnableOpenMetrics: true,
 		},
 	))
+	level.Info(logger).Log("http-handler", "Started")
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`<html>
 			<head><title>AWS Cost Exporter</title></head>

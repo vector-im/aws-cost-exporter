@@ -3,7 +3,6 @@ package fetcher
 import (
 	"github.com/st8ed/aws-cost-exporter/pkg/state"
 
-	"bufio"
 	"compress/gzip"
 	"context"
 	"encoding/json"
@@ -12,6 +11,10 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"database/sql"
+	"encoding/csv"
+
+	_ "github.com/mattn/go-sqlite3"
 
 	"github.com/go-kit/log"
 	"github.com/go-kit/log/level"
@@ -42,6 +45,14 @@ type SortRecentFirst []state.BillingPeriod
 func (a SortRecentFirst) Len() int           { return len(a) }
 func (a SortRecentFirst) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
 func (a SortRecentFirst) Less(i, j int) bool { return a[i] < a[j] }
+func index(slice []string, item string) int {
+	for i := range slice {
+			if slice[i] == item {
+					return i
+			}
+	}
+	return -1
+}
 
 func GetBillingPeriods(config *state.Config, client *s3.Client) ([]state.BillingPeriod, error) {
 	params := &s3.ListObjectsV2Input{
@@ -148,11 +159,6 @@ func FetchReport(config *state.Config, client *s3.Client, manifest *ReportManife
 
 	level.Info(logger).Log("msg", "Fetching report", "file", reportFile, "parts", len(manifest.ReportKeys))
 
-	f, err := os.Create(reportFile + ".tmp")
-	if err != nil {
-		return err
-	}
-
 	for reportPart, reportKey := range manifest.ReportKeys {
 		level.Info(logger).Log("msg", "Fetching report part", "file", reportFile, "part", reportPart)
 
@@ -160,39 +166,6 @@ func FetchReport(config *state.Config, client *s3.Client, manifest *ReportManife
 			Bucket: aws.String(manifest.Bucket),
 			Key:    aws.String(reportKey),
 		}
-
-		piper, pipew := io.Pipe()
-
-		writeErr := make(chan error)
-
-		go func() {
-			defer piper.Close()
-
-			zr, err := gzip.NewReader(piper)
-			if err != nil {
-				writeErr <- err
-				return
-			}
-			defer zr.Close()
-
-			if reportPart > 0 {
-				// Keep table header (first csv line)
-				// only for first report partition
-				headerReader := bufio.NewReaderSize(zr, 1)
-
-				if _, err := headerReader.ReadString('\n'); err != nil {
-					writeErr <- err
-					return
-				}
-			}
-
-			if _, err := io.Copy(f, zr); err != nil {
-				writeErr <- err
-				return
-			}
-
-			writeErr <- nil
-		}()
 
 		obj, err := client.GetObject(context.TODO(), params)
 		if err != nil {
@@ -202,26 +175,86 @@ func FetchReport(config *state.Config, client *s3.Client, manifest *ReportManife
 
 		level.Debug(logger).Log("ContentLength", obj.ContentLength)
 
-		if written, err := io.Copy(pipew, obj.Body); err != nil {
-			return err
-		} else {
-			level.Debug(logger).Log("Written", written)
-		}
-
-		pipew.Close()
-
-		if err := <-writeErr; err != nil {
+		zr, err := gzip.NewReader(obj.Body)
+		if err != nil {
 			return err
 		}
-	}
+		defer zr.Close()
 
-	if err := f.Close(); err != nil {
+		r := csv.NewReader(zr)
+		// Read the header row.
+		header, err := r.Read()
+		if err != nil {
+			return err
+		}
+		bill_BillingPeriodStartDate := index(header, "bill/BillingPeriodStartDate")
+		bill_BillingPeriodEndDate := index(header, "bill/BillingPeriodEndDate")
+		product_ProductName := index(header, "product/ProductName")
+		lineItem_Operation := index(header, "lineItem/Operation")
+		lineItem_LineItemType := index(header, "lineItem/LineItemType")
+		lineItem_UsageType := index(header, "lineItem/UsageType")
+		pricing_unit := index(header, "pricing/unit")
+		lineItem_CurrencyCode := index(header, "lineItem/CurrencyCode")
+
+		db, err := sql.Open("sqlite3", config.DatabasePath)
+		if err != nil {
+			return err
+		}
+		defer db.Close()
+		err = db.Ping()
+		if err != nil {
+			return err
+		}
+		for {
+			record, err := r.Read()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+
+			level.Debug(logger).Log("SQLite", "Inserting record")
+
+			stmt, err := db.Prepare(`insert into records (bill/BillingPeriodStartDate
+				bill/BillingPeriodEndDate product/ProductName lineItem/Operation
+				lineItem/LineItemType lineItem/UsageType pricing/unit lineItem/CurrencyCode) values(?, ?, ?, ?, ?, ?, ?, ?)`)
+			if err != nil {
+				return err
+			}
+
+			_, err = stmt.Exec(record[bill_BillingPeriodStartDate],
+												 record[bill_BillingPeriodEndDate],
+												 record[product_ProductName],
+												 record[lineItem_Operation],
+												 record[lineItem_LineItemType],
+												 record[lineItem_UsageType],
+												 record[pricing_unit],
+												 record[lineItem_CurrencyCode])
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func PrepareSqlite(config *state.Config, logger log.Logger) error {
+	db, err := sql.Open("sqlite3", config.DatabasePath)
+	if err != nil {
 		return err
 	}
-
-	if err := os.Rename(reportFile+".tmp", reportFile); err != nil {
+	defer db.Close()
+	err = db.Ping()
+	if err != nil {
 		return err
 	}
-
+	stmt, err := db.Prepare(`create table if not exists records (bill/BillingPeriodStartDate
+														bill/BillingPeriodEndDate product/ProductName lineItem/Operation
+														lineItem/LineItemType lineItem/UsageType pricing/unit lineItem/CurrencyCode)`)
+	if err != nil {
+		return err
+	}
+	_, err = stmt.Exec()
+	if err != nil {
+		return err
+	}
 	return nil
 }

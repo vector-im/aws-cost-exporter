@@ -17,6 +17,7 @@ type State struct {
 }
 
 type Config struct {
+	DatabasePath   string
 	RepositoryPath string
 	QueriesPath    string
 	BucketName     string
