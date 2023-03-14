@@ -8,12 +8,16 @@ import (
 
 	"context"
 	"os/user"
+	"strconv"
+	"time"
+	"math/rand"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
-	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
+	stsTypes "github.com/aws/aws-sdk-go-v2/service/sts/types"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -158,18 +162,39 @@ func main() {
 	if user, err := user.Current(); err == nil && user.Uid == "0" {
 		level.Warn(logger).Log("msg", "AWS Cost Exporter is running as root user. This exporter is designed to run as unpriviledged user, root is not required.")
 	}
+	ctx := context.Background()
 
-	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithDefaultRegion("us-east-1"))
+	cfg, err := config.LoadDefaultConfig(ctx, config.WithDefaultRegion("us-east-1"))
 	if err != nil {
 		level.Error(logger).Log("err", err)
 		os.Exit(1)
 	}
 
-	chained_role_arn, present := os.LookupEnv("AWS_CHAINE_ROLE")
+	chained_role_arn, present := os.LookupEnv("AWS_CHAINED_ROLE")
 	if present {
-		sts_client := sts.NewFromConfig(cfg)
-		creds := stscreds.NewAssumeRoleProvider(sts_client, chained_role_arn)
-		cfg.Credentials = aws.NewCredentialsCache(creds)
+		level.Info(logger).Log("chained-role", chained_role_arn)
+
+		sourceAccount := sts.NewFromConfig(cfg)
+
+		// Assume target role and store credentials
+		rand.Seed(time.Now().UnixNano())
+		response, err := sourceAccount.AssumeRole(ctx, &sts.AssumeRoleInput{
+				RoleArn: aws.String(chained_role_arn),
+				RoleSessionName: aws.String("AWSCostExporter-" + strconv.Itoa(10000 + rand.Intn(25000))),
+		})
+		if err != nil {
+			level.Error(logger).Log("err", err)
+			os.Exit(1)
+		}
+		var assumedRoleCreds *stsTypes.Credentials = response.Credentials
+
+		// Create config with target service client, using assumed role
+		cfg, err = config.LoadDefaultConfig(ctx, config.WithDefaultRegion("us-east-1"),
+																				config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(*assumedRoleCreds.AccessKeyId, *assumedRoleCreds.SecretAccessKey, *assumedRoleCreds.SessionToken)))
+		if err != nil {
+			level.Error(logger).Log("err", err)
+			os.Exit(1)
+		}
 	}
 	client := s3.NewFromConfig(cfg)
 
