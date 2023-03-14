@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -147,20 +148,17 @@ func FetchReport(config *state.Config, client *s3.Client, manifest *ReportManife
 		return err
 	}
 
-	reportFile := filepath.Join(
-		config.RepositoryPath, "data",
-		periodStart.Format("20060102")+"-"+manifest.AssemblyId+".csv",
-	)
-
-	if _, err := os.Stat(reportFile); !errors.Is(err, os.ErrNotExist) {
-		level.Warn(logger).Log("msg", "Report file already exists, skipping download", "file", reportFile)
-		return nil
-	}
-
-	level.Info(logger).Log("msg", "Fetching report", "file", reportFile, "parts", len(manifest.ReportKeys))
-
 	for reportPart, reportKey := range manifest.ReportKeys {
+
+		reportFile := filepath.Join(
+			config.RepositoryPath, "data",
+			periodStart.Format("20060102")+"-"+manifest.AssemblyId+"-"+strconv.FormatInt(int64(reportPart), 10)+".csv",
+		)
 		level.Info(logger).Log("msg", "Fetching report part", "file", reportFile, "part", reportPart)
+		if _, err := os.Stat(reportFile); !errors.Is(err, os.ErrNotExist) {
+			level.Warn(logger).Log("msg", "Report file part already exists, skipping download", "file", reportFile)
+			continue
+		}
 
 		params := &s3.GetObjectInput{
 			Bucket: aws.String(manifest.Bucket),
@@ -205,6 +203,15 @@ func FetchReport(config *state.Config, client *s3.Client, manifest *ReportManife
 		if err != nil {
 			return err
 		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 15 * time.Minute)
+		defer cancel()
+
+    tx, err := db.BeginTx(ctx, nil)
+    if err != nil {
+        return err
+    }
+    defer tx.Rollback()
 		for {
 			record, err := r.Read()
 			if errors.Is(err, io.EOF) {
@@ -213,7 +220,7 @@ func FetchReport(config *state.Config, client *s3.Client, manifest *ReportManife
 
 			level.Debug(logger).Log("SQLite", "Inserting record")
 
-			stmt, err := db.Prepare(`insert into records (bill_BillingPeriodStartDate,
+			stmt, err := tx.Prepare(`insert into records (bill_BillingPeriodStartDate,
 				bill_BillingPeriodEndDate, product_ProductName, lineItem_Operation,
 				lineItem_LineItemType, lineItem_UsageType, pricing_unit, lineItem_CurrencyCode) values(?, ?, ?, ?, ?, ?, ?, ?)`)
 			if err != nil {
@@ -231,6 +238,16 @@ func FetchReport(config *state.Config, client *s3.Client, manifest *ReportManife
 			if err != nil {
 				return err
 			}
+		}
+
+		file, err := os.Create(reportFile)
+		if err != nil {
+				return err
+		}
+		defer file.Close()
+
+    if err = tx.Commit(); err != nil {
+			return err
 		}
 	}
 	return nil
