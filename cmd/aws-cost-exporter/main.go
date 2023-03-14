@@ -9,8 +9,11 @@ import (
 	"context"
 	"os/user"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
+	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -162,6 +165,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	chained_role_arn, present := os.LookupEnv("AWS_CHAINE_ROLE")
+	if present {
+		sts_client := sts.NewFromConfig(cfg)
+		creds := stscreds.NewAssumeRoleProvider(sts_client, chained_role_arn)
+		cfg.Credentials = aws.NewCredentialsCache(creds)
+	}
 	client := s3.NewFromConfig(cfg)
 
 	config := &state.Config{
