@@ -19,7 +19,7 @@ import (
 
 	"time"
 
-	_ "github.com/mithrandie/csvq-driver"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 func Compute(config *state.Config, registry *prometheus.Registry, logger log.Logger) error {
@@ -30,11 +30,11 @@ func Compute(config *state.Config, registry *prometheus.Registry, logger log.Log
 	ctx, cancel := context.WithTimeout(context.Background(), 5 * time.Minute)
 	defer cancel()
 
-	db, err := sql.Open("csvq", config.RepositoryPath)
+	db, err := sql.Open("sqlite3", config.DatabasePath)
 	if err != nil {
 		return err
 	} else {
-		level.Debug(logger).Log("msg", "Opened database", "repository", config.RepositoryPath)
+		level.Debug(logger).Log("msg", "Opened database", config.DatabasePath)
 	}
 	defer func() {
 		if err := db.Close(); err != nil {

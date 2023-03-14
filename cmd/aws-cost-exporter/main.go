@@ -134,7 +134,7 @@ func main() {
 		databasePath = kingpin.Flag(
 			"database",
 			"Path to store sqlite AWS billing reports",
-		).Default("/var/lib/aws-cost-exporter/database").String()
+		).Default("/var/lib/aws-cost-exporter/database.sqlite").String()
 
 		queriesPath = kingpin.Flag(
 			"queries-dir",

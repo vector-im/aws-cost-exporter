@@ -213,9 +213,9 @@ func FetchReport(config *state.Config, client *s3.Client, manifest *ReportManife
 
 			level.Debug(logger).Log("SQLite", "Inserting record")
 
-			stmt, err := db.Prepare(`insert into records (bill/BillingPeriodStartDate
-				bill/BillingPeriodEndDate product/ProductName lineItem/Operation
-				lineItem/LineItemType lineItem/UsageType pricing/unit lineItem/CurrencyCode) values(?, ?, ?, ?, ?, ?, ?, ?)`)
+			stmt, err := db.Prepare(`insert into records (bill_BillingPeriodStartDate,
+				bill_BillingPeriodEndDate, product_ProductName, lineItem_Operation,
+				lineItem_LineItemType, lineItem_UsageType, pricing_unit, lineItem_CurrencyCode) values(?, ?, ?, ?, ?, ?, ?, ?)`)
 			if err != nil {
 				return err
 			}
@@ -246,9 +246,9 @@ func PrepareSqlite(config *state.Config, logger log.Logger) error {
 	if err != nil {
 		return err
 	}
-	stmt, err := db.Prepare(`create table if not exists records (bill/BillingPeriodStartDate
-														bill/BillingPeriodEndDate product/ProductName lineItem/Operation
-														lineItem/LineItemType lineItem/UsageType pricing/unit lineItem/CurrencyCode)`)
+	stmt, err := db.Prepare(`create table if not exists records (id integer primary key autoincrement, bill_BillingPeriodStartDate text,
+														bill_BillingPeriodEndDate text, product_ProductName text, lineItem_Operation text,
+														lineItem_LineItemType text, lineItem_UsageType text, pricing_unit text, lineItem_CurrencyCode text)`)
 	if err != nil {
 		return err
 	}
