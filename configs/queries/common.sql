@@ -10,8 +10,8 @@ select
     SUM(`lineItem_UsageAmount`) as metric_amount,
 
     SUM(`lineItem_UnblendedCost`) as metric_cost,
-    `lineItem_CurrencyCode` as `currency`
-from `report-current.csv`
+    `lineItem_CurrencyCode` as `currency`,
+from `records`
 where `lineItem_UnblendedCost` > 0
 group by
     `bill_BillingPeriodStartDate`,

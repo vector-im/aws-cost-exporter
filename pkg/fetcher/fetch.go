@@ -191,18 +191,21 @@ func FetchReport(config *state.Config, client *s3.Client, manifest *ReportManife
 		lineItem_Operation := index(header, "lineItem/Operation")
 		lineItem_LineItemType := index(header, "lineItem/LineItemType")
 		lineItem_UsageType := index(header, "lineItem/UsageType")
+		lineItem_UsageAmount := index(header, "lineItem/UsageAmount")
 		pricing_unit := index(header, "pricing/unit")
 		lineItem_CurrencyCode := index(header, "lineItem/CurrencyCode")
+		lineItem_UnblendedCost := index(header, "lineItem/UnblendedCost")
 
 		db, err := sql.Open("sqlite3", config.DatabasePath)
 		if err != nil {
 			return err
 		}
-		defer db.Close()
-		err = db.Ping()
-		if err != nil {
-			return err
-		}
+		defer func() {
+			if err := db.Close(); err != nil {
+				level.Warn(logger).Log("msg", "Unable to close database", "err", err)
+			}
+			level.Debug(logger).Log("msg", "Closed database")
+		}()
 
 		ctx, cancel := context.WithTimeout(context.Background(), 15 * time.Minute)
 		defer cancel()
@@ -221,8 +224,9 @@ func FetchReport(config *state.Config, client *s3.Client, manifest *ReportManife
 			level.Debug(logger).Log("SQLite", "Inserting record")
 
 			stmt, err := tx.Prepare(`insert into records (bill_BillingPeriodStartDate,
-				bill_BillingPeriodEndDate, product_ProductName, lineItem_Operation,
-				lineItem_LineItemType, lineItem_UsageType, pricing_unit, lineItem_CurrencyCode) values(?, ?, ?, ?, ?, ?, ?, ?)`)
+				bill_BillingPeriodEndDate, product_ProductName, lineItem_Operation, lineItem_UnblendedCost,
+				lineItem_LineItemType, lineItem_UsageType, lineItem_UsageAmount, pricing_unit, lineItem_CurrencyCode)
+				values(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 			if err != nil {
 				return err
 			}
@@ -231,15 +235,17 @@ func FetchReport(config *state.Config, client *s3.Client, manifest *ReportManife
 												 record[bill_BillingPeriodEndDate],
 												 record[product_ProductName],
 												 record[lineItem_Operation],
+												 record[lineItem_UnblendedCost],
 												 record[lineItem_LineItemType],
 												 record[lineItem_UsageType],
+												 record[lineItem_UsageAmount],
 												 record[pricing_unit],
 												 record[lineItem_CurrencyCode])
 			if err != nil {
 				return err
 			}
 		}
-
+		level.Debug(logger).Log("Report", "File done", reportFile)
 		file, err := os.Create(reportFile)
 		if err != nil {
 				return err
@@ -264,8 +270,8 @@ func PrepareSqlite(config *state.Config, logger log.Logger) error {
 		return err
 	}
 	stmt, err := db.Prepare(`create table if not exists records (id integer primary key autoincrement, bill_BillingPeriodStartDate text,
-														bill_BillingPeriodEndDate text, product_ProductName text, lineItem_Operation text,
-														lineItem_LineItemType text, lineItem_UsageType text, pricing_unit text, lineItem_CurrencyCode text)`)
+														bill_BillingPeriodEndDate text, product_ProductName text, lineItem_Operation text, lineItem_UnblendedCost text,
+														lineItem_LineItemType text, lineItem_UsageType text, lineItem_UsageAmount text, pricing_unit text, lineItem_CurrencyCode text)`)
 	if err != nil {
 		return err
 	}
