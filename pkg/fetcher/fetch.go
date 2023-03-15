@@ -195,6 +195,7 @@ func FetchReport(config *state.Config, client *s3.Client, manifest *ReportManife
 		pricing_unit := index(header, "pricing/unit")
 		lineItem_CurrencyCode := index(header, "lineItem/CurrencyCode")
 		lineItem_UnblendedCost := index(header, "lineItem/UnblendedCost")
+		lineItem_UsageAccountId := index(header, "lineItem/UsageAccountId")
 
 		db, err := sql.Open("sqlite3", config.DatabasePath)
 		if err != nil {
@@ -221,12 +222,12 @@ func FetchReport(config *state.Config, client *s3.Client, manifest *ReportManife
 				break
 			}
 
-			level.Debug(logger).Log("SQLite", "Inserting record")
+			level.Debug(logger).Log("SQLite", "Inserting record", record[lineItem_UsageAccountId])
 
 			stmt, err := tx.Prepare(`insert into records (bill_BillingPeriodStartDate,
-				bill_BillingPeriodEndDate, product_ProductName, lineItem_Operation, lineItem_UnblendedCost,
+				bill_BillingPeriodEndDate, product_ProductName, lineItem_Operation, lineItem_UnblendedCost, lineItem_UsageAccountId,
 				lineItem_LineItemType, lineItem_UsageType, lineItem_UsageAmount, pricing_unit, lineItem_CurrencyCode)
-				values(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+				values(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 			if err != nil {
 				return err
 			}
@@ -236,6 +237,7 @@ func FetchReport(config *state.Config, client *s3.Client, manifest *ReportManife
 												 record[product_ProductName],
 												 record[lineItem_Operation],
 												 record[lineItem_UnblendedCost],
+												 record[lineItem_UsageAccountId],
 												 record[lineItem_LineItemType],
 												 record[lineItem_UsageType],
 												 record[lineItem_UsageAmount],
@@ -270,7 +272,8 @@ func PrepareSqlite(config *state.Config, logger log.Logger) error {
 		return err
 	}
 	stmt, err := db.Prepare(`create table if not exists records (id integer primary key autoincrement, bill_BillingPeriodStartDate text,
-														bill_BillingPeriodEndDate text, product_ProductName text, lineItem_Operation text, lineItem_UnblendedCost text,
+														bill_BillingPeriodEndDate text, product_ProductName text,
+														lineItem_Operation text, lineItem_UnblendedCost text, lineItem_UsageAccountId text,
 														lineItem_LineItemType text, lineItem_UsageType text, lineItem_UsageAmount text, pricing_unit text, lineItem_CurrencyCode text)`)
 	if err != nil {
 		return err

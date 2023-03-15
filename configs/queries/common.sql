@@ -11,6 +11,7 @@ select
 
     SUM(`lineItem_UnblendedCost`) as metric_cost,
     `lineItem_CurrencyCode` as `currency`,
+    `lineItem_UsageAccountId` as 'account_id'
 from `records`
 where `lineItem_UnblendedCost` > 0
 group by
@@ -22,5 +23,6 @@ group by
 
     `lineItem_UsageType`,
     `pricing_unit`,
-    `lineItem_CurrencyCode`
+    `lineItem_CurrencyCode`,
+    `lineItem_UsageAccountId`
 order by `period`, `product`, `operation`
