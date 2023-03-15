@@ -9,14 +9,11 @@ import (
 	"github.com/go-kit/log/level"
 
 	"time"
-
-	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
 func Prefetch(
 	state *state.State,
 	config *state.Config,
-	client *s3.Client,
 	registry *prometheus.Registry,
 	periods []state.BillingPeriod,
 	logger log.Logger,
@@ -26,7 +23,7 @@ func Prefetch(
 		_, isCached := state.ReportLastModified[string(period)]
 
 		if !isCached || isLast {
-			if _, err := UpdateReport(state, config, client, &period, logger); err != nil {
+			if _, err := UpdateReport(state, config, &period, logger); err != nil {
 				return err
 			}
 		}
@@ -37,7 +34,6 @@ func Prefetch(
 
 func UpdateReport(
 	state *state.State, config *state.Config,
-	client *s3.Client,
 	period *state.BillingPeriod,
 	logger log.Logger,
 ) (updated bool, err error) {
@@ -47,7 +43,7 @@ func UpdateReport(
 	}
 
 	level.Debug(logger).Log("msg", "Attempt to download new report manifest", "period", period, "lastModified", lastModified)
-	manifest, err := fetcher.GetReportManifest(config, client, period, &lastModified)
+	manifest, err := fetcher.GetReportManifest(config, period, &lastModified)
 	if err != nil {
 		return false, err
 	}
@@ -57,7 +53,7 @@ func UpdateReport(
 		return false, nil
 	}
 
-	if err := fetcher.FetchReport(config, client, manifest, logger); err != nil {
+	if err := fetcher.FetchReport(config, manifest, logger); err != nil {
 		return false, err
 	}
 

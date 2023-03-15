@@ -17,11 +17,12 @@ type State struct {
 }
 
 type Config struct {
-	DatabasePath   string
-	RepositoryPath string
-	QueriesPath    string
-	BucketName     string
-	ReportName     string
+	DatabasePath    string
+	RepositoryPath  string
+	QueriesPath     string
+	BucketName      string
+	ReportName      string
+	ChainedRole     string
 
 	StateFilePath string
 }

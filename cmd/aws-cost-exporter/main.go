@@ -6,18 +6,8 @@ import (
 	"github.com/st8ed/aws-cost-exporter/pkg/processor"
 	"github.com/st8ed/aws-cost-exporter/pkg/state"
 
-	"context"
 	"os/user"
-	"strconv"
-	"time"
-	"math/rand"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/credentials"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/aws/aws-sdk-go-v2/service/sts"
-	stsTypes "github.com/aws/aws-sdk-go-v2/service/sts/types"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -37,7 +27,7 @@ import (
 	kingpin "gopkg.in/alecthomas/kingpin.v2"
 )
 
-func newGatherer(config *state.Config, state *state.State, client *s3.Client, disableExporterMetrics bool, logger log.Logger) (prometheus.GathererFunc, error) {
+func newGatherer(config *state.Config, state *state.State, disableExporterMetrics bool, logger log.Logger) (prometheus.GathererFunc, error) {
 	level.Info(logger).Log("msg", "newGatherer")
 	reg := prometheus.NewRegistry()
 
@@ -56,7 +46,7 @@ func newGatherer(config *state.Config, state *state.State, client *s3.Client, di
 	}
 
 	level.Info(logger).Log("msg", "billing periods")
-	periods, err := fetcher.GetBillingPeriods(config, client)
+	periods, err := fetcher.GetBillingPeriods(config)
 	if err != nil {
 		return nil, err
 	}
@@ -64,7 +54,7 @@ func newGatherer(config *state.Config, state *state.State, client *s3.Client, di
 	state.Periods = periods
 
 	level.Info(logger).Log("msg", "prefetch")
-	if err := collector.Prefetch(state, config, client, reg, periods, logger); err != nil {
+	if err := collector.Prefetch(state, config, reg, periods, logger); err != nil {
 		return nil, err
 	}
 
@@ -82,7 +72,7 @@ func newGatherer(config *state.Config, state *state.State, client *s3.Client, di
 			period := state.Periods[len(state.Periods)-1]
 
 			if period.IsPastDue() {
-				periods, err := fetcher.GetBillingPeriods(config, client)
+				periods, err := fetcher.GetBillingPeriods(config)
 				if err != nil {
 					return nil, err
 				}
@@ -91,7 +81,7 @@ func newGatherer(config *state.Config, state *state.State, client *s3.Client, di
 				period = periods[len(periods)-1]
 			}
 
-			changed, err := collector.UpdateReport(state, config, client, &period, logger)
+			changed, err := collector.UpdateReport(state, config, &period, logger)
 			if err != nil {
 				return nil, err
 			}
@@ -181,42 +171,8 @@ func main() {
 	if user, err := user.Current(); err == nil && user.Uid == "0" {
 		level.Warn(logger).Log("msg", "AWS Cost Exporter is running as root user. This exporter is designed to run as unpriviledged user, root is not required.")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 1 * time.Minute)
-	defer cancel()
 
-	cfg, err := config.LoadDefaultConfig(ctx, config.WithDefaultRegion("us-east-1"))
-	if err != nil {
-		level.Error(logger).Log("err", err)
-		os.Exit(1)
-	}
-
-	chained_role_arn, present := os.LookupEnv("AWS_CHAINED_ROLE")
-	if present {
-		level.Info(logger).Log("chained-role", chained_role_arn)
-
-		sourceAccount := sts.NewFromConfig(cfg)
-
-		// Assume target role and store credentials
-		rand.Seed(time.Now().UnixNano())
-		response, err := sourceAccount.AssumeRole(ctx, &sts.AssumeRoleInput{
-				RoleArn: aws.String(chained_role_arn),
-				RoleSessionName: aws.String("AWSCostExporter-" + strconv.Itoa(10000 + rand.Intn(25000))),
-		})
-		if err != nil {
-			level.Error(logger).Log("err", err)
-			os.Exit(1)
-		}
-		var assumedRoleCreds *stsTypes.Credentials = response.Credentials
-
-		// Create config with target service client, using assumed role
-		cfg, err = config.LoadDefaultConfig(ctx, config.WithDefaultRegion("us-east-1"),
-																				config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(*assumedRoleCreds.AccessKeyId, *assumedRoleCreds.SecretAccessKey, *assumedRoleCreds.SessionToken)))
-		if err != nil {
-			level.Error(logger).Log("err", err)
-			os.Exit(1)
-		}
-	}
-	client := s3.NewFromConfig(cfg)
+	chainedRole, _ := os.LookupEnv("AWS_CHAINED_ROLE")
 
 	config := &state.Config{
 		RepositoryPath: *repositoryPath,
@@ -226,6 +182,7 @@ func main() {
 
 		BucketName: *bucketName,
 		ReportName: *reportName,
+		ChainedRole: chainedRole,
 	}
 
 	state, err := state.Load(config)
@@ -235,7 +192,7 @@ func main() {
 	}
 
 	level.Info(logger).Log("gatherer", "Starting")
-	gatherer, err := newGatherer(config, state, client, *disableExporterMetrics, logger)
+	gatherer, err := newGatherer(config, state, *disableExporterMetrics, logger)
 	if err != nil {
 		level.Error(logger).Log("err", err)
 		os.Exit(1)

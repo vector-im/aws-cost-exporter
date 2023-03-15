@@ -3,6 +3,13 @@ package fetcher
 import (
 	"github.com/st8ed/aws-cost-exporter/pkg/state"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
+	stsTypes "github.com/aws/aws-sdk-go-v2/service/sts/types"
+
 	"compress/gzip"
 	"context"
 	"encoding/json"
@@ -12,6 +19,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"math/rand"
 	"database/sql"
 	"encoding/csv"
 
@@ -24,8 +32,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/smithy-go"
 )
 
@@ -55,7 +61,45 @@ func index(slice []string, item string) int {
 	return -1
 }
 
-func GetBillingPeriods(config *state.Config, client *s3.Client) ([]state.BillingPeriod, error) {
+func RefreshClient(config *state.Config) (*s3.Client, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 1 * time.Minute)
+	defer cancel()
+
+	cfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithDefaultRegion("us-east-1"))
+	if err != nil {
+		return nil, err
+	}
+
+	if (config.ChainedRole != "") {
+		sourceAccount := sts.NewFromConfig(cfg)
+
+		// Assume target role and store credentials
+		rand.Seed(time.Now().UnixNano())
+		response, err := sourceAccount.AssumeRole(ctx, &sts.AssumeRoleInput{
+				RoleArn: aws.String(config.ChainedRole),
+				RoleSessionName: aws.String("AWSCostExporter-" + strconv.Itoa(10000 + rand.Intn(25000))),
+		})
+		if err != nil {
+			return nil, err
+		}
+		var assumedRoleCreds *stsTypes.Credentials = response.Credentials
+
+		// Create config with target service client, using assumed role
+		cfg, err = awsconfig.LoadDefaultConfig(ctx, awsconfig.WithDefaultRegion("us-east-1"),
+																				awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(*assumedRoleCreds.AccessKeyId, *assumedRoleCreds.SecretAccessKey, *assumedRoleCreds.SessionToken)))
+		if err != nil {
+			return nil, err
+		}
+
+	}
+	return s3.NewFromConfig(cfg), nil
+}
+
+func GetBillingPeriods(config *state.Config) ([]state.BillingPeriod, error) {
+	client, err := RefreshClient(config)
+	if err != nil {
+		return nil, err
+	}
 	params := &s3.ListObjectsV2Input{
 		Bucket:    aws.String(config.BucketName),
 		Prefix:    aws.String("/" + config.ReportName + "/"),
@@ -93,7 +137,11 @@ func GetBillingPeriods(config *state.Config, client *s3.Client) ([]state.Billing
 	}
 }
 
-func GetReportManifest(config *state.Config, client *s3.Client, period *state.BillingPeriod, lastModified *time.Time) (*ReportManifest, error) {
+func GetReportManifest(config *state.Config, period *state.BillingPeriod, lastModified *time.Time) (*ReportManifest, error) {
+	client, err := RefreshClient(config)
+	if err != nil {
+		return nil, err
+	}
 	params := &s3.GetObjectInput{
 		Bucket: aws.String(config.BucketName),
 		Key: aws.String(fmt.Sprintf(
@@ -142,7 +190,11 @@ func GetReportManifest(config *state.Config, client *s3.Client, period *state.Bi
 	return manifest, nil
 }
 
-func FetchReport(config *state.Config, client *s3.Client, manifest *ReportManifest, logger log.Logger) error {
+func FetchReport(config *state.Config, manifest *ReportManifest, logger log.Logger) error {
+	client, err := RefreshClient(config)
+	if err != nil {
+		return err
+	}
 	periodStart, err := time.Parse("20060102T150405Z", manifest.BillingPeriod.Start)
 	if err != nil {
 		return err
