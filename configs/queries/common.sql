@@ -1,26 +1,28 @@
 select
-    (`bill/BillingPeriodStartDate` || "-" || `bill/BillingPeriodEndDate`)  as `period`,
+    (`bill_BillingPeriodStartDate` || "-" || `bill_BillingPeriodEndDate`)  as `period`,
 
-    `product/ProductName` as `product`,
-    `lineItem/Operation` as `operation`,
-    `lineItem/LineItemType` as `item_type`,
+    `product_ProductName` as `product`,
+    `lineItem_Operation` as `operation`,
+    `lineItem_LineItemType` as `item_type`,
 
-    `lineItem/UsageType` as `usage_type`,
-    `pricing/unit` as `usage_unit`,
-    SUM(`lineItem/UsageAmount`) as metric_amount,
+    `lineItem_UsageType` as `usage_type`,
+    `pricing_unit` as `usage_unit`,
+    SUM(`lineItem_UsageAmount`) as metric_amount,
 
-    SUM(`lineItem/UnblendedCost`) as metric_cost,
-    `lineItem/CurrencyCode` as `currency`
-from `report-current.csv`
-where `lineItem/UnblendedCost` > 0
+    SUM(`lineItem_UnblendedCost`) as metric_cost,
+    `lineItem_CurrencyCode` as `currency`,
+    `lineItem_UsageAccountId` as 'account_id'
+from `records`
+where `lineItem_UnblendedCost` > 0
 group by
-    `bill/BillingPeriodStartDate`,
-    `bill/BillingPeriodEndDate`,
-    `product/ProductName`,
-    `lineItem/Operation`,
-    `lineItem/LineItemType`,
+    `bill_BillingPeriodStartDate`,
+    `bill_BillingPeriodEndDate`,
+    `product_ProductName`,
+    `lineItem_Operation`,
+    `lineItem_LineItemType`,
 
-    `lineItem/UsageType`,
-    `pricing/unit`,
-    `lineItem/CurrencyCode`
+    `lineItem_UsageType`,
+    `pricing_unit`,
+    `lineItem_CurrencyCode`,
+    `lineItem_UsageAccountId`
 order by `period`, `product`, `operation`

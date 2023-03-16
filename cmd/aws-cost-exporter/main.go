@@ -6,11 +6,8 @@ import (
 	"github.com/st8ed/aws-cost-exporter/pkg/processor"
 	"github.com/st8ed/aws-cost-exporter/pkg/state"
 
-	"context"
 	"os/user"
 
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -30,24 +27,28 @@ import (
 	kingpin "gopkg.in/alecthomas/kingpin.v2"
 )
 
-func newGatherer(config *state.Config, state *state.State, client *s3.Client, disableExporterMetrics bool, logger log.Logger) (prometheus.GathererFunc, error) {
+func newGatherer(config *state.Config, state *state.State, disableExporterMetrics bool, logger log.Logger) (prometheus.GathererFunc, error) {
+	level.Info(logger).Log("msg", "newGatherer")
 	reg := prometheus.NewRegistry()
 
 	if !disableExporterMetrics {
+		level.Info(logger).Log("msg", "export metrics collectors")
 		reg.MustRegister(collectors.NewBuildInfoCollector())
 		reg.MustRegister(collectors.NewGoCollector(
 			collectors.WithGoCollections(collectors.GoRuntimeMemStatsCollection | collectors.GoRuntimeMetricsCollection),
 		))
 	}
 
-	periods, err := fetcher.GetBillingPeriods(config, client)
+	level.Info(logger).Log("msg", "billing periods")
+	periods, err := fetcher.GetBillingPeriods(config)
 	if err != nil {
 		return nil, err
 	}
 
 	state.Periods = periods
 
-	if err := collector.Prefetch(state, config, client, reg, periods, logger); err != nil {
+	level.Info(logger).Log("msg", "prefetch")
+	if err := collector.Prefetch(state, config, reg, periods, logger); err != nil {
 		return nil, err
 	}
 
@@ -55,6 +56,7 @@ func newGatherer(config *state.Config, state *state.State, client *s3.Client, di
 		return nil, err
 	}
 
+	level.Info(logger).Log("msg", "compute")
 	if err := processor.Compute(config, reg, logger); err != nil {
 		return nil, err
 	}
@@ -64,7 +66,7 @@ func newGatherer(config *state.Config, state *state.State, client *s3.Client, di
 			period := state.Periods[len(state.Periods)-1]
 
 			if period.IsPastDue() {
-				periods, err := fetcher.GetBillingPeriods(config, client)
+				periods, err := fetcher.GetBillingPeriods(config)
 				if err != nil {
 					return nil, err
 				}
@@ -73,17 +75,23 @@ func newGatherer(config *state.Config, state *state.State, client *s3.Client, di
 				period = periods[len(periods)-1]
 			}
 
-			changed, err := collector.UpdateReport(state, config, client, &period, logger)
+			changed, err := collector.UpdateReport(state, config, &period, logger)
 			if err != nil {
+				level.Error(logger).Log("err", err)
 				return nil, err
 			}
 
+			level.Info(logger).Log("msg", "Reports updated")
 			if changed {
+				level.Info(logger).Log("msg", "Save")
 				if err := state.Save(config); err != nil {
+					level.Error(logger).Log("err", err)
 					return nil, err
 				}
 
+				level.Info(logger).Log("msg", "Compute")
 				if err := processor.Compute(config, reg, logger); err != nil {
+					level.Error(logger).Log("err", err)
 					return nil, err
 				}
 			}
@@ -109,6 +117,11 @@ func main() {
 			"repository",
 			"Path to store cached AWS billing reports",
 		).Default("/var/lib/aws-cost-exporter/repository").String()
+
+		databasePath = kingpin.Flag(
+			"database",
+			"Path to store sqlite AWS billing reports",
+		).Default("/var/lib/aws-cost-exporter/database.sqlite").String()
 
 		queriesPath = kingpin.Flag(
 			"queries-dir",
@@ -156,21 +169,17 @@ func main() {
 		level.Warn(logger).Log("msg", "AWS Cost Exporter is running as root user. This exporter is designed to run as unpriviledged user, root is not required.")
 	}
 
-	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithDefaultRegion("us-east-1"))
-	if err != nil {
-		level.Error(logger).Log("err", err)
-		os.Exit(1)
-	}
-
-	client := s3.NewFromConfig(cfg)
+	chainedRole, _ := os.LookupEnv("AWS_CHAINED_ROLE")
 
 	config := &state.Config{
 		RepositoryPath: *repositoryPath,
+		DatabasePath: *databasePath,
 		QueriesPath:    *queriesPath,
 		StateFilePath:  *stateFilePath,
 
 		BucketName: *bucketName,
 		ReportName: *reportName,
+		ChainedRole: chainedRole,
 	}
 
 	state, err := state.Load(config)
@@ -179,18 +188,21 @@ func main() {
 		os.Exit(1)
 	}
 
-	gatherer, err := newGatherer(config, state, client, *disableExporterMetrics, logger)
+	level.Info(logger).Log("gatherer", "Starting")
+	gatherer, err := newGatherer(config, state, *disableExporterMetrics, logger)
 	if err != nil {
 		level.Error(logger).Log("err", err)
 		os.Exit(1)
 	}
 
+	level.Info(logger).Log("http-handler", "Starting")
 	http.Handle(*metricsPath, promhttp.HandlerFor(
 		gatherer,
 		promhttp.HandlerOpts{
 			EnableOpenMetrics: true,
 		},
 	))
+	level.Info(logger).Log("http-handler", "Started")
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`<html>
 			<head><title>AWS Cost Exporter</title></head>
