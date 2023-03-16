@@ -39,12 +39,6 @@ func newGatherer(config *state.Config, state *state.State, disableExporterMetric
 		))
 	}
 
-	level.Info(logger).Log("msg", "prepare sqlite")
-	err := fetcher.PrepareSqlite(config, logger)
-	if err != nil {
-		return nil, err
-	}
-
 	level.Info(logger).Log("msg", "billing periods")
 	periods, err := fetcher.GetBillingPeriods(config)
 	if err != nil {
@@ -83,6 +77,7 @@ func newGatherer(config *state.Config, state *state.State, disableExporterMetric
 
 			changed, err := collector.UpdateReport(state, config, &period, logger)
 			if err != nil {
+				level.Error(logger).Log("err", err)
 				return nil, err
 			}
 
@@ -90,11 +85,13 @@ func newGatherer(config *state.Config, state *state.State, disableExporterMetric
 			if changed {
 				level.Info(logger).Log("msg", "Save")
 				if err := state.Save(config); err != nil {
+					level.Error(logger).Log("err", err)
 					return nil, err
 				}
 
 				level.Info(logger).Log("msg", "Compute")
 				if err := processor.Compute(config, reg, logger); err != nil {
+					level.Error(logger).Log("err", err)
 					return nil, err
 				}
 			}

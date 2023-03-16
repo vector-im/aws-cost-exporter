@@ -53,6 +53,14 @@ func UpdateReport(
 		return false, nil
 	}
 
+	level.Debug(logger).Log("msg", "Reset sqlite")
+	err = fetcher.ResetSqlite(config, logger)
+	if err != nil {
+		return false, err
+	}
+
+
+	level.Debug(logger).Log("msg", "Fetch report")
 	if err := fetcher.FetchReport(config, manifest, logger); err != nil {
 		return false, err
 	}

@@ -200,6 +200,7 @@ func FetchReport(config *state.Config, manifest *ReportManifest, logger log.Logg
 		return err
 	}
 
+	level.Info(logger).Log("msg", "Fetching report parts")
 	for reportPart, reportKey := range manifest.ReportKeys {
 
 		reportFile := filepath.Join(
@@ -313,7 +314,7 @@ func FetchReport(config *state.Config, manifest *ReportManifest, logger log.Logg
 	return nil
 }
 
-func PrepareSqlite(config *state.Config, logger log.Logger) error {
+func ResetSqlite(config *state.Config, logger log.Logger) error {
 	db, err := sql.Open("sqlite3", config.DatabasePath)
 	if err != nil {
 		return err
@@ -323,7 +324,18 @@ func PrepareSqlite(config *state.Config, logger log.Logger) error {
 	if err != nil {
 		return err
 	}
-	stmt, err := db.Prepare(`create table if not exists records (id integer primary key autoincrement, bill_BillingPeriodStartDate text,
+
+	level.Debug(logger).Log("msg", "Reset SQLite records")
+	stmt, err := db.Prepare(`drop table if exists records`)
+	if err != nil {
+		return err
+	}
+	_, err = stmt.Exec()
+	if err != nil {
+		return err
+	}
+	level.Debug(logger).Log("msg", "Create table records")
+	stmt, err = db.Prepare(`create table if not exists records (id integer primary key autoincrement, bill_BillingPeriodStartDate text,
 														bill_BillingPeriodEndDate text, product_ProductName text,
 														lineItem_Operation text, lineItem_UnblendedCost text, lineItem_UsageAccountId text,
 														lineItem_LineItemType text, lineItem_UsageType text, lineItem_UsageAmount text, pricing_unit text, lineItem_CurrencyCode text)`)
